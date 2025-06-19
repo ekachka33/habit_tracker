@@ -6,7 +6,7 @@ from .models import Habit
 class HabitAdmin(admin.ModelAdmin):
     list_display = (
         'user', 'place', 'time', 'action', 'is_pleasant',
-        'related_habit', 'periodicity', 'reward', 'time_to_complete', 'is_public'
+        'related_habit', 'periodicity', 'reward', 'duration', 'is_public'
     )
     list_filter = ('is_pleasant', 'is_public', 'periodicity')
     search_fields = ('action', 'place', 'reward')
