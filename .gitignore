@@ -1,0 +1,41 @@
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Dotenv files (contains sensitive data)
+.env
+.env.template # Если будешь использовать шаблон для .env
+
+# Migrations
+*/migrations/*.py
+!*/migrations/__init__.py
+
+# Local development files
+db.sqlite3
+*.log
+*.pot
+
+# Virtual environment
+venv/
+*.egg-info/
+.Python
+.venv
+
+# IDE specific files
+.idea/          # PyCharm specific files
+.vscode/        # VSCode specific files
+
+# Media and static files (if they will be served locally)
+/media/
+/static/
+
+# OS generated files
+.DS_Store       # macOS
+.Trashes        # macOS
+Thumbs.db       # Windows
+.venv/
+db.sqlite3
+/media/
+/static/
+.DS_Store
+.idea/
