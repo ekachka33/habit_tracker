@@ -132,13 +132,13 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated', # Это базовое разрешение по умолчанию
+        'rest_framework.permissions.IsAuthenticated',
     ),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination', # Настройка пагинации по умолчанию
-    'PAGE_SIZE': 5, # Размер страницы по умолчанию для всех Generic Views
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 5,
 }
 
-# Настройки JWT токенов (необязательно, но полезно для кастомизации)
+# Настройки JWT токенов
 from datetime import timedelta
 
 SIMPLE_JWT = {
@@ -149,3 +149,11 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': True,                      # Обновлять поле last_login пользователя при входе
 }
 
+
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_ENABLE_UTC = True
