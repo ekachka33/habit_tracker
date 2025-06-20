@@ -1,9 +1,10 @@
 import os
 
-import requests
 from celery import shared_task
 from django.utils import timezone
 import time
+import asyncio
+import telegram
 
 @shared_task
 def debug_task(message):
@@ -19,21 +20,27 @@ def debug_task(message):
 @shared_task
 def send_telegram_message(chat_id, message_text):
     """
-    Отправляет сообщение в Telegram.
+    Отправляет сообщение в Telegram с использованием python-telegram-bot.
+    Запускает асинхронную функцию внутри синхронной Celery-задачи.
     """
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not bot_token:
-        print("TELEGRAM_BOT_TOKEN не найден в переменных окружения.")
-        return
+        print("TELEGRAM_BOT_TOKEN не найден в переменных окружения. Сообщение не отправлено.")
+        return False
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        'chat_id': chat_id,
-        'text': message_text
-    }
-    try:
-        response = requests.post(url, data=payload)
-        response.raise_for_status() # Вызывает исключение для ошибок HTTP (4xx или 5xx)
-        print(f"Telegram message sent successfully! Response: {response.json()}")
-    except requests.exceptions.RequestException as e:
-        print(f"Error sending Telegram message: {e}")
+    # Асинхронная функция для отправки сообщения
+    async def _send_message_async():
+        try:
+            bot = telegram.Bot(token=bot_token)
+            await bot.send_message(chat_id=chat_id, text=message_text) # <-- Здесь используется await
+            print(f"Сообщение успешно отправлено в Telegram. Chat ID: {chat_id}, Message: {message_text}")
+            return True
+        except telegram.error.TelegramError as e:
+            print(f"Ошибка Telegram API при отправке сообщения: {e}")
+            return False
+        except Exception as e:
+            print(f"Неизвестная ошибка при отправке сообщения в Telegram: {e}")
+            return False
+
+    # Запускаем асинхронную функцию
+    return asyncio.run(_send_message_async())

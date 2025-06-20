@@ -49,6 +49,14 @@ class Habit(models.Model):
     # Признак публичности - привычки можно публиковать в общий доступ, чтобы другие пользователи могли брать в пример чужие привычки.
     is_public = models.BooleanField(default=False, verbose_name="Признак публичности")
 
+    telegram_chat_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="ID чата Telegram для уведомлений",
+        help_text="ID чата Telegram для отправки напоминаний о привычке."
+    )
+
     class Meta:
         verbose_name = "Привычка"
         verbose_name_plural = "Привычки"
@@ -76,7 +84,7 @@ class Habit(models.Model):
                 )
 
         # Валидатор: Время выполнения должно быть не больше 120 секунд.
-        if self.time_to_complete > 120:
+        if self.duration > 120:
             from django.core.exceptions import ValidationError
             raise ValidationError(
                 'Время на выполнение привычки не должно превышать 120 секунд.'
