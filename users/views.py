@@ -1,7 +1,8 @@
 # users/views.py
+# users/views.py (обновленный, только для регистрации)
 from rest_framework import generics
-from rest_framework.permissions import AllowAny # Разрешаем доступ без аутентификации
-from users.serializers import UserRegisterSerializer
+from rest_framework.permissions import AllowAny
+from users.serializers import UserRegisterSerializer # Только этот сериализатор
 
 class UserRegisterAPIView(generics.CreateAPIView):
     """
@@ -9,4 +10,4 @@ class UserRegisterAPIView(generics.CreateAPIView):
     Доступно без аутентификации.
     """
     serializer_class = UserRegisterSerializer
-    permission_classes = [AllowAny] # Разрешаем любому пользователю (даже неавторизованному) регистрироваться
+    permission_classes = [AllowAny]

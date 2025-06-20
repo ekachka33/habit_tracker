@@ -1,4 +1,4 @@
-# users/urls.py
+# users/urls.py (обновленный, только для регистрации)
 from django.urls import path
 from users.views import UserRegisterAPIView
 

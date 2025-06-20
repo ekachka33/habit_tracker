@@ -45,10 +45,13 @@ INSTALLED_APPS = [
     'habits',
     'users',
     'django_celery_beat',
+    'corsheaders',
+    'drf_yasg',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -164,3 +167,10 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_ENABLE_UTC = True
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_BEAT_INTERVAL = 10 # Для быстрого тестирования, потом можно увеличить
+
+
+
+
+CORS_ALLOW_ALL_ORIGINS = True
+
+
