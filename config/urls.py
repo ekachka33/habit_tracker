@@ -7,8 +7,8 @@ from rest_framework_simplejwt.views import (
     TokenVerifyView,
 )
 from rest_framework.routers import DefaultRouter
-from habits.views import HabitViewSet, HabitPublicListAPIView # Импортируем HabitPublicListAPIView
-# from users.views import UserViewSet # Если у вас есть ViewSet для пользователей
+from habits.views import HabitViewSet, PublicHabitListAPIView
+
 
 router = DefaultRouter()
 router.register(r'habits', HabitViewSet, basename='habit') # Регистрируем HabitViewSet для пути 'habits'
@@ -26,7 +26,7 @@ urlpatterns = [
     path('api/', include(router.urls)), # ЭТО ВКЛЮЧАЕТ /api/habits/ для всех методов
 
     # Отдельный эндпоинт для публичных привычек (если нужен отдельный путь)
-    path('api/habits/public/', HabitPublicListAPIView.as_view(), name='habit_public_list'),
+    path('api/habits/public/', PublicHabitListAPIView.as_view(), name='habit_public_list'),
 
     # Включение URL-ов для приложения users (если там не ViewSet и роутер)
     path('api/users/', include('users.urls')),
