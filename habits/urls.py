@@ -1,15 +1,20 @@
-from django.urls import path, include
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 from habits.views import HabitViewSet, PublicHabitListAPIView
 
 app_name = 'habits'
 
 router = DefaultRouter()
-router.register(r'habits', HabitViewSet, basename='habit') # Эндпоинты для CRUD ваших привычек
+# Регистрируем HabitViewSet с ПУСТЫМ префиксом.
+# Это значит, что его URL-адреса будут непосредственно
+# после пути, по которому habits.urls будет включен в config/urls.py
+router.register(r'', HabitViewSet, basename='habit')
 
 urlpatterns = [
-    path('', include(router.urls)), # Включаем URL-адреса из DefaultRouter
-
-    # Отдельный эндпоинт для публичных привычек
-    path('habits/public/', PublicHabitListAPIView.as_view(), name='habit_public_list'),
+    # Этот путь будет доступен как /api/habits/public/ (благодаря config/urls.py)
+    path('public/', PublicHabitListAPIView.as_view(), name='habit_public_list'),
 ]
+
+# Добавляем все URL-адреса, сгенерированные роутером.
+# Они будут доступны как /api/habits/, /api/habits/<pk>/, /api/habits/<pk>/complete/
+urlpatterns += router.urls

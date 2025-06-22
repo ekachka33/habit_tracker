@@ -1,47 +1,96 @@
 # habits/views.py
-from rest_framework import viewsets, generics
-from rest_framework.permissions import IsAuthenticated # Убрали AllowAny, если хотим только для аутентифицированных
+from rest_framework import viewsets, generics, status
+from rest_framework.permissions import IsAuthenticated
 from habits.models import Habit
 from habits.serializers import HabitSerializer
 from rest_framework.pagination import PageNumberPagination
-from habits.permissions import IsOwner # Импортируем IsOwner из habits/permissions.py
+from habits.permissions import IsOwner # Импортируем IsOwner
+from rest_framework.decorators import action
+from django.utils import timezone
+from rest_framework.response import Response
+from django.http import Http404 # Для обработки Habit.DoesNotExist
+
 
 class HabitPagination(PageNumberPagination):
-    """
-    Пагинация для списка привычек.
-    Выводит по 5 привычек на страницу.
-    """
     page_size = 5
     page_size_query_param = 'page_size'
     max_page_size = 100
 
+
 class HabitViewSet(viewsets.ModelViewSet):
     serializer_class = HabitSerializer
-    # Применяем IsOwner, чтобы гарантировать, что только владелец может выполнять CRUD
-    # IsAuthenticated уже включен в общие настройки DEFAULT_PERMISSION_CLASSES
-    # или его можно явно указать, если DEFAULT_PERMISSION_CLASSES отсутствует.
-    # Если DEFAULT_PERMISSION_CLASSES = [IsAuthenticated], то здесь достаточно [IsOwner]
-    permission_classes = [IsOwner]
+    permission_classes = [IsAuthenticated, IsOwner] # Добавляем IsAuthenticated
     pagination_class = HabitPagination
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
     def get_queryset(self):
-        # ViewSet теперь отвечает только за "мои" привычки (CRUD)
-        # Этот queryset сам по себе уже фильтрует по владельцу.
+        # Возвращаем только привычки текущего аутентифицированного пользователя
         return Habit.objects.filter(user=self.request.user)
 
+    @action(detail=True, methods=['post'], url_path='complete')
+    def complete(self, request, pk=None): # ИЗМЕНЕНО: Имя метода должно быть 'complete'
+        """
+        Отмечает привычку как выполненную.
+        При выполнении полезной привычки, связанная приятная привычка также считается выполненной.
+        """
+        try:
+            # get_object() уже проверяет права доступа благодаря permission_classes
+            habit = self.get_object()
+        except Http404:
+            return Response({"detail": "Привычка не найдена."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Проверяем, что это полезная привычка (не приятная)
+        if habit.is_pleasant:
+            return Response(
+                {"detail": "Невозможно отметить приятную привычку как выполненную напрямую."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. Отмечаем полезную привычку как выполненную
+        habit.last_completed_at = timezone.now()
+        habit.save()
+
+        # 2. Если есть связанная приятная привычка, отмечаем и её
+        if habit.related_habit:
+            related_habit = habit.related_habit
+            # Валидация в сериализаторе уже должна гарантировать, что related_habit.is_pleasant=True
+            # Но можно оставить проверку как дополнительную меру
+            if not related_habit.is_pleasant:
+                 # Это сообщение, по идее, не должно быть достигнуто, если валидация в сериализаторе работает корректно
+                return Response(
+                    {"detail": "Связанная привычка должна быть приятной.",
+                     "habit_id": habit.pk
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            related_habit.last_completed_at = timezone.now() # Обновляем время выполнения связанной привычки
+            related_habit.save() # Сохраняем связанную привычку
+
+            return Response(
+                {"message": "Полезная привычка и связанная приятная привычка отмечены как выполненные.",
+                 "habit_id": habit.pk,
+                 "related_habit_id": related_habit.pk
+                },
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(
+                {"message": "Привычка успешно отмечена как выполненная.",
+                 "habit_id": habit.pk
+                },
+                status=status.HTTP_200_OK
+            )
+
+
 class PublicHabitListAPIView(generics.ListAPIView):
-    """
-    Список публичных привычек с пагинацией.
-    Доступно только аутентифицированным пользователям для просмотра.
-    """
     serializer_class = HabitSerializer
-    # Только аутентифицированные пользователи могут видеть публичные привычки.
-    # Права на просмотр самих объектов будут определяться их is_public=True
+    # Public habits доступны для просмотра всем аутентифицированным пользователям.
     permission_classes = [IsAuthenticated]
     pagination_class = HabitPagination
 
     def get_queryset(self):
+        # Возвращаем только публичные привычки
         return Habit.objects.filter(is_public=True)

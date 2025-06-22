@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'rest_framework_simplejwt',
     'habits',
     'users',
@@ -168,9 +169,14 @@ CELERY_ENABLE_UTC = True
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_BEAT_INTERVAL = 10 # Для быстрого тестирования, потом можно увеличить
 
-
-
-
 CORS_ALLOW_ALL_ORIGINS = True
 
+CELERY_BEAT_SCHEDULE = {
+    'check-and-send-habit-reminders': {
+        'task': 'habits.tasks.check_and_send_habit_reminders',
+        'schedule': timedelta(seconds=10),  # Запускать каждые 10 секунд
+        'args': (), # или []
+        'options': {'expires': 300}, # Задача будет удалена из очереди через 5 минут, если не выполнится
+    },
 
+}
