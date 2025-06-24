@@ -40,3 +40,5 @@ db.sqlite3
 .DS_Store
 .idea/
 .env
+.coverage
+celerybeat-schedule.db
