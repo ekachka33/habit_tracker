@@ -1,31 +1,56 @@
 from celery import shared_task
-from habits.models import Habit
+from habits.models import Habit, NotificationLog  # Импортируем новую модель
 from django.utils import timezone
 from datetime import timedelta, datetime
 import logging
+import os
 from telegram import Bot  # Импортируем Bot здесь
 
 logger = logging.getLogger(__name__)
 
-# Замените 'YOUR_TELEGRAM_BOT_TOKEN' на ваш фактический токен бота
-# Лучше получать его из переменных окружения или настроек Django
-# Например, из settings.py: TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-# Для простоты примера оставим так, но в реальном проекте используйте безопасное хранение.
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # ЗАМЕНИТЕ НА ВАШ ТОКЕН БОТА
+# Получаем токен бота из переменных окружения
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 
 
 @shared_task(bind=True)
-def _send_telegram_message_async_wrapper(self, chat_id, message_text):
+def _send_telegram_message_async_wrapper(self, chat_id, message_text, notification_log_id=None):
     """
     Асинхронная обертка для отправки Telegram сообщения.
     Используется как Celery задача, чтобы не блокировать основной поток.
+    Также обновляет статус лога уведомлений и last_notification_sent привычки.
     """
+    notification_log = None
+    if notification_log_id:
+        try:
+            notification_log = NotificationLog.objects.get(id=notification_log_id)
+        except NotificationLog.DoesNotExist:
+            logger.error(f"NotificationLog с ID {notification_log_id} не найден.")
+            # Продолжаем без обновления лога, но с логгированием ошибки
+
     try:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)  # Инициализируем бота внутри задачи
+        if not TELEGRAM_BOT_TOKEN:
+            raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения.")
+
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
         bot.send_message(chat_id=chat_id, text=message_text)
         logger.info(f"Сообщение успешно отправлено в чат {chat_id}: {message_text}")
+        if notification_log:
+            notification_log.status = 'SENT'
+            notification_log.save()
+            logger.info(f"Статус NotificationLog {notification_log_id} обновлен на SENT.")
+
+            # Обновляем last_notification_sent только после УСПЕШНОЙ отправки
+            habit = notification_log.habit  # Получаем привычку через related_name
+            habit.last_notification_sent = timezone.now()
+            habit.save()
+            logger.info(f"last_notification_sent для привычки {habit.id} обновлено после успешной отправки.")
+
     except Exception as e:
         logger.error(f"Ошибка при отправке сообщения в Telegram чат {chat_id}: {e}")
+        if notification_log:
+            notification_log.status = 'FAILED'
+            notification_log.save()
+            logger.error(f"Статус NotificationLog {notification_log_id} обновлен на FAILED.")
         # Можно добавить логику повторной попытки
         raise self.retry(exc=e, countdown=60, max_retries=3)
 
@@ -33,7 +58,9 @@ def _send_telegram_message_async_wrapper(self, chat_id, message_text):
 @shared_task
 def send_telegram_notification(habit_id):
     """
-    Отправляет уведомление о привычке в Telegram и обновляет last_notification_sent.
+    Отправляет уведомление о привычке в Telegram.
+    Создает запись в NotificationLog.
+    last_notification_sent будет обновлено в _send_telegram_message_async_wrapper после успешной отправки.
     """
     try:
         habit = Habit.objects.get(id=habit_id)
@@ -51,12 +78,22 @@ def send_telegram_notification(habit_id):
         return
 
     message_text = f"Напоминание о привычке: '{habit.action}' в '{habit.place}' в {habit.time.strftime('%H:%M')}!"
-    _send_telegram_message_async_wrapper.delay(chat_id=habit.telegram_chat_id, message_text=message_text)
 
-    # Обновляем last_notification_sent только после успешной постановки в очередь
-    habit.last_notification_sent = timezone.now()
-    habit.save()
-    logger.info(f"Уведомление для привычки {habit.id} поставлено в очередь и время обновления записано.")
+    # Создаем запись в NotificationLog со статусом QUEUED
+    notification_log = NotificationLog.objects.create(
+        habit=habit,
+        message_content=message_text,
+        status='QUEUED'
+    )
+    logger.info(f"Запись NotificationLog {notification_log.id} создана со статусом QUEUED.")
+
+    # Передаем ID лога в асинхронную обертку
+    _send_telegram_message_async_wrapper.delay(
+        chat_id=habit.telegram_chat_id,
+        message_text=message_text,
+        notification_log_id=notification_log.id
+    )
+    # last_notification_sent теперь обновляется в _send_telegram_message_async_wrapper после успешной отправки
 
 
 @shared_task
@@ -75,8 +112,7 @@ def check_and_send_habit_reminders():
     habits_to_check = Habit.objects.filter(is_pleasant=False).exclude(telegram_chat_id__exact='')
 
     for habit in habits_to_check:
-        # ОБНОВЛЕНИЕ: Убедимся, что объект привычки содержит самые свежие данные из БД
-        habit.refresh_from_db()  # Это критически важно для тестов!
+        habit.refresh_from_db()  # Убедимся, что объект привычки содержит самые свежие данные из БД
 
         # Проверяем, пришло ли время для отправки сегодня
         if habit.time <= current_time:

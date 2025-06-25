@@ -2,17 +2,17 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
 from django.contrib.auth import get_user_model
-from habits.models import Habit
+from habits.models import Habit, NotificationLog
 from django.utils import timezone
 from datetime import time, timedelta, datetime
-import pytz  # ИМПОРТИРОВАНО: pytz
 from unittest.mock import patch, MagicMock, ANY
+import pytz  # ИМПОРТИРУЕМ pytz
 
 from django.core.exceptions import ValidationError
 
 # Импортируем Celery-таски для прямого вызова в тестах
-# Убедитесь, что habits/tasks.py существует и содержит эти таски
-from habits.tasks import send_telegram_notification, check_and_send_habit_reminders
+from habits.tasks import send_telegram_notification, check_and_send_habit_reminders, \
+    _send_telegram_message_async_wrapper
 
 User = get_user_model()
 
@@ -382,9 +382,10 @@ class HabitTest(APITestCase):
 
     # --- Тесты Celery-тасок ---
     @patch('habits.tasks._send_telegram_message_async_wrapper.delay')  # Патчим асинхронную обертку
-    @patch('django.utils.timezone.now', side_effect=[
-        datetime(2025, 1, 1, 9, 0, 0, tzinfo=pytz.utc),
-        datetime(2025, 1, 1, 9, 0, 0, tzinfo=pytz.utc)
+    @patch('habits.tasks.timezone.now', side_effect=[
+        # Теперь side_effect здесь корректен, т.к. используется только для test_send_telegram_notification_success
+        pytz.utc.localize(datetime(2025, 1, 1, 9, 0, 0)),  # Используем pytz.utc.localize
+        pytz.utc.localize(datetime(2025, 1, 1, 9, 0, 0))  # Используем pytz.utc.localize
     ])
     def test_send_telegram_notification_success(self, mock_now, mock_send_message_delay):
         """Тестирование успешной отправки уведомления для полезной привычки."""
@@ -401,9 +402,12 @@ class HabitTest(APITestCase):
         self.assertIn(self.habit1.telegram_chat_id, called_kwargs['chat_id'])
         self.assertIn(self.habit1.action, called_kwargs['message_text'])
 
-        self.habit1.refresh_from_db()
-        self.assertIsNotNone(self.habit1.last_notification_sent)
-        self.assertEqual(self.habit1.last_notification_sent.date(), mock_now().date())
+        # Проверяем, что создана запись в логе уведомлений со статусом QUEUED
+        self.assertEqual(NotificationLog.objects.count(), 1)
+        log_entry = NotificationLog.objects.first()
+        self.assertEqual(log_entry.status, 'QUEUED')
+        self.assertEqual(log_entry.habit, self.habit1)
+        self.assertIn("Напоминание о привычке", log_entry.message_content)
 
     @patch('habits.tasks._send_telegram_message_async_wrapper.delay')
     def test_send_telegram_notification_no_chat_id(self, mock_send_message_delay):
@@ -417,6 +421,7 @@ class HabitTest(APITestCase):
         self.habit1.refresh_from_db()
         self.assertIsNone(self.habit1.last_completed_at)
         self.assertIsNone(self.habit1.last_notification_sent)
+        self.assertEqual(NotificationLog.objects.count(), 0)  # Не должно быть записей в логе
 
     @patch('habits.tasks._send_telegram_message_async_wrapper.delay')
     def test_send_telegram_notification_pleasant_habit_skipped(self, mock_send_message_delay):
@@ -430,9 +435,11 @@ class HabitTest(APITestCase):
         self.pleasant_habit.refresh_from_db()
         self.assertIsNone(self.pleasant_habit.last_completed_at)
         self.assertIsNone(self.pleasant_habit.last_notification_sent)
+        self.assertEqual(NotificationLog.objects.count(), 0)  # Не должно быть записей в логе
 
     @patch('habits.tasks._send_telegram_message_async_wrapper.delay')
-    @patch('django.utils.timezone.now', return_value=datetime(2025, 1, 1, 9, 0, 0, tzinfo=pytz.utc))
+    @patch('habits.tasks.timezone.now',
+           return_value=pytz.utc.localize(datetime(2025, 1, 1, 9, 0, 0)))  # Используем pytz.utc.localize
     def test_send_telegram_notification_not_due_yet(self, mock_now, mock_send_message_delay):
         """Тестирование, что send_telegram_notification вызывается, даже если время еще не пришло,
         но check_and_send_habit_reminders должен предотвратить это."""
@@ -445,108 +452,143 @@ class HabitTest(APITestCase):
 
         mock_send_message_delay.assert_called_once()
         self.habit1.refresh_from_db()
-        self.assertIsNotNone(self.habit1.last_notification_sent)
+        # last_notification_sent обновляется только после фактической успешной отправки из _send_telegram_message_async_wrapper
+        self.assertIsNone(
+            self.habit1.last_notification_sent)  # Должен быть None, т.к. _send_telegram_message_async_wrapper не выполнялся
 
-    @patch('habits.tasks.send_telegram_notification')
-    @patch('django.utils.timezone.now')
-    def test_check_and_send_habit_reminders_daily(self, mock_now, mock_send_notification):
+        # Проверяем, что создана запись в логе уведомлений со статусом QUEUED
+        self.assertEqual(NotificationLog.objects.count(), 1)
+        log_entry = NotificationLog.objects.first()
+        self.assertEqual(log_entry.status, 'QUEUED')
+
+    # ИЗМЕНЕН: Теперь патчим Bot.send_message и вызываем .run() таска, ожидая исключение
+    @patch('habits.tasks.Bot')  # Патчим класс Bot
+    @patch('habits.tasks.timezone.now', return_value=pytz.utc.localize(datetime(2025, 1, 1, 9, 0, 0)))
+    def test_send_telegram_notification_api_error(self, mock_now, MockBot):
+        """Тестирование обработки ошибок при отправке в Telegram (имитация ошибки)."""
+        # Настроим мок send_message, чтобы он поднимал исключение
+        MockBot.return_value.send_message.side_effect = Exception("Simulated Telegram API error")
+
+        self.habit1.telegram_chat_id = "123456789"
+        self.habit1.time = time(8, 0)
+        self.habit1.last_notification_sent = None
+        self.habit1.save()
+
+        # Создаем запись в логе, как это делает send_telegram_notification
+        notification_log = NotificationLog.objects.create(
+            habit=self.habit1,
+            message_content=f"Напоминание о привычке: '{self.habit1.action}' в '{self.habit1.place}' в {self.habit1.time.strftime('%H:%M')}!",
+            status='QUEUED'
+        )
+
+        # Вызываем _send_telegram_message_async_wrapper.run() напрямую, чтобы проверить логику обработки ошибок внутри таска
+        # Bind=True означает, что self должен быть передан как первый аргумент (это сам таск).
+        # Celery обычно делает это автоматически. Здесь мы можем передать его как None или MagicMock
+        with self.assertRaisesMessage(Exception, "Simulated Telegram API error"):  # <-- ИЗМЕНЕНИЕ ЗДЕСЬ
+            _send_telegram_message_async_wrapper.run(
+                chat_id=self.habit1.telegram_chat_id,
+                message_text="Test message",
+                # Сообщение, которое будет пытаться отправить _send_telegram_message_async_wrapper
+                notification_log_id=notification_log.id
+            )
+
+        # Проверяем, что last_notification_sent не изменилось
+        self.habit1.refresh_from_db()
+        self.assertIsNone(self.habit1.last_notification_sent)
+
+        # Проверяем, что NotificationLog получил статус 'FAILED'
+        log_entry = NotificationLog.objects.get(id=notification_log.id)  # Получаем обновленную запись
+        self.assertEqual(log_entry.status, 'FAILED')
+
+    @patch('habits.tasks.send_telegram_notification.delay')  # ИЗМЕНЕН: Патчим send_telegram_notification.delay
+    @patch('habits.tasks.timezone.now')
+    def test_check_and_send_habit_reminders_daily(self, mock_now, mock_send_notification_delay):  # ИЗМЕНЕН: Имя мока
         """Тестирование check_and_send_habit_reminders с ежедневной периодичностью."""
-        test_now_initial = datetime(2025, 1, 5, 9, 0, 0, tzinfo=pytz.utc)
+        test_now_initial = pytz.utc.localize(datetime(2025, 1, 5, 9, 0, 0))  # Используем pytz.utc.localize
         mock_now.return_value = test_now_initial
 
         self.habit1.telegram_chat_id = "chat_id_1"
         self.habit1.time = time(8, 0)
         self.habit1.periodicity = 1
-        self.habit1.last_notification_sent = datetime(2025, 1, 4, 8, 30, 0, tzinfo=pytz.utc)
+        self.habit1.last_notification_sent = pytz.utc.localize(datetime(2025, 1, 4, 8, 30, 0))  # Отправлено вчера
         self.habit1.is_pleasant = False
         self.habit1.save()
 
         check_and_send_habit_reminders()
 
-        # Проверяем, что send_telegram_notification была вызвана для habit1
-        mock_send_notification.delay.assert_called_once_with(self.habit1.id)
+        mock_send_notification_delay.assert_called_once_with(self.habit1.id)  # Проверяем вызов с ID привычки
 
-        # Симулируем обновление last_notification_sent самой задачей Celery
-        Habit.objects.filter(pk=self.habit1.pk).update(last_notification_sent=test_now_initial)
-        self.habit1.refresh_from_db()  # Обновляем локальный объект
+        # ИЗМЕНЕНИЕ ЗДЕСЬ: Эмулируем обновление last_notification_sent после успешной отправки
+        self.habit1.last_notification_sent = test_now_initial  # Обновляем на текущее время проверки
+        self.habit1.save()
+        self.habit1.refresh_from_db()  # Убедимся, что изменения сохранены и загружены
 
-        self.assertEqual(self.habit1.last_notification_sent.date(), test_now_initial.date())
+        mock_send_notification_delay.reset_mock()
 
-        mock_send_notification.delay.reset_mock()  # Сбрасываем мок для следующего этапа
-
-        # Устанавливаем время на более позднее в тот же день (10:00)
-        test_now_later_today = datetime(2025, 1, 5, 10, 0, 0, tzinfo=pytz.utc)
-        mock_now.return_value = test_now_later_today
+        # Проверяем, что при повторном запуске в тот же день, не будет отправлено
+        mock_now.return_value = pytz.utc.localize(datetime(2025, 1, 5, 10, 0, 0))  # Время позже в тот же день
         check_and_send_habit_reminders()
+        mock_send_notification_delay.assert_not_called()
 
-        # Проверяем, что send_telegram_notification НЕ была вызвана повторно сегодня
-        mock_send_notification.delay.assert_not_called()
+        mock_send_notification_delay.reset_mock()
 
-        mock_send_notification.delay.reset_mock()
-
-        # Устанавливаем время на следующий день (6 января, 9:00)
-        test_now_next_day = datetime(2025, 1, 6, 9, 0, 0, tzinfo=pytz.utc)
-        mock_now.return_value = test_now_next_day
+        # Проверяем, что будет отправлено на следующий день
+        mock_now.return_value = pytz.utc.localize(datetime(2025, 1, 6, 9, 0, 0))  # Следующий день
         check_and_send_habit_reminders()
+        mock_send_notification_delay.assert_called_once_with(self.habit1.id)
 
-        # Проверяем, что send_telegram_notification была вызвана на следующий день
-        mock_send_notification.delay.assert_called_once_with(self.habit1.id)
-        # Симулируем обновление last_notification_sent
-        Habit.objects.filter(pk=self.habit1.pk).update(last_notification_sent=test_now_next_day)
-        self.habit1.refresh_from_db()
-        self.assertEqual(self.habit1.last_notification_sent.date(), test_now_next_day.date())
-
-    @patch('habits.tasks.send_telegram_notification')
-    @patch('django.utils.timezone.now')
-    def test_check_and_send_habit_reminders_multiple_days(self, mock_now, mock_send_notification):
+    @patch('habits.tasks.send_telegram_notification.delay')  # ИЗМЕНЕН: Патчим send_telegram_notification.delay
+    @patch('habits.tasks.timezone.now')
+    def test_check_and_send_habit_reminders_multiple_days(self, mock_now,
+                                                          mock_send_notification_delay):  # ИЗМЕНЕН: Имя мока
         """Тестирование check_and_send_habit_reminders с периодичностью > 1 дня."""
-        test_now_initial = datetime(2025, 1, 7, 9, 0, 0, tzinfo=pytz.utc)
+        test_now_initial = pytz.utc.localize(datetime(2025, 1, 7, 9, 0, 0))  # Используем pytz.utc.localize
         mock_now.return_value = test_now_initial
 
         self.habit1.telegram_chat_id = "chat_id_1"
         self.habit1.time = time(8, 0)
-        self.habit1.periodicity = 3  # Периодичность 3 дня
-        self.habit1.last_notification_sent = datetime(2025, 1, 4, 8, 30, 0, tzinfo=pytz.utc)  # Отправлено 4 января
+        self.habit1.periodicity = 3
+        self.habit1.last_notification_sent = pytz.utc.localize(datetime(2025, 1, 4, 8, 30, 0))
         self.habit1.is_pleasant = False
         self.habit1.save()
 
         check_and_send_habit_reminders()
 
-        # Проверяем, что send_telegram_notification была вызвана для habit1 (должно быть 7 января)
-        mock_send_notification.delay.assert_called_once_with(self.habit1.id)
+        mock_send_notification_delay.assert_called_once_with(self.habit1.id)  # Проверяем вызов с ID привычки
 
-        # Симулируем обновление last_notification_sent
-        Habit.objects.filter(pk=self.habit1.pk).update(last_notification_sent=test_now_initial)
-        self.habit1.refresh_from_db()
-        self.assertEqual(self.habit1.last_notification_sent.date(), test_now_initial.date())
+        # ИЗМЕНЕНИЕ ЗДЕСЬ: Эмулируем обновление last_notification_sent после успешной отправки
+        self.habit1.last_notification_sent = test_now_initial  # Обновляем на текущее время проверки
+        self.habit1.save()
+        self.habit1.refresh_from_db()  # Убедимся, что изменения сохранены и загружены
 
-        mock_send_notification.delay.reset_mock()
+        mock_send_notification_delay.reset_mock()
 
-        # Устанавливаем время на следующий день (8 января, 9:00) - еще не должно быть отправлено (periodicity=3)
-        test_now_next_day_not_due = datetime(2025, 1, 8, 9, 0, 0, tzinfo=pytz.utc)
-        mock_now.return_value = test_now_next_day_not_due
+        # Проверяем, что не будет отправлено на следующий день (периодичность 3)
+        mock_now.return_value = pytz.utc.localize(
+            datetime(2025, 1, 8, 9, 0, 0))  # Через 1 день после last_notification_sent
         check_and_send_habit_reminders()
-        mock_send_notification.delay.assert_not_called()
+        mock_send_notification_delay.assert_not_called()
 
-        mock_send_notification.delay.reset_mock()
+        mock_send_notification_delay.reset_mock()
 
-        # Устанавливаем время на 10 января, 9:00 - должно быть отправлено (7 + 3 = 10)
-        test_now_due_again = datetime(2025, 1, 10, 9, 0, 0, tzinfo=pytz.utc)
-        mock_now.return_value = test_now_due_again
+        # Проверяем, что не будет отправлено через 2 дня (периодичность 3)
+        mock_now.return_value = pytz.utc.localize(datetime(2025, 1, 9, 9, 0, 0))  # Через 2 дня
         check_and_send_habit_reminders()
+        mock_send_notification_delay.assert_not_called()
 
-        # Проверяем, что send_telegram_notification была вызвана
-        mock_send_notification.delay.assert_called_once_with(self.habit1.id)
-        # Симулируем обновление last_notification_sent
-        Habit.objects.filter(pk=self.habit1.pk).update(last_notification_sent=test_now_due_again)
-        self.habit1.refresh_from_db()
-        self.assertEqual(self.habit1.last_notification_sent.date(), test_now_due_again.date())
+        mock_send_notification_delay.reset_mock()
+
+        # Проверяем, что будет отправлено через 3 дня
+        mock_now.return_value = pytz.utc.localize(datetime(2025, 1, 10, 9, 0, 0))  # Через 3 дня
+        check_and_send_habit_reminders()
+        mock_send_notification_delay.assert_called_once_with(self.habit1.id)
 
     @patch('habits.tasks._send_telegram_message_async_wrapper.delay')
-    @patch('django.utils.timezone.now', return_value=datetime(2025, 1, 1, 7, 0, 0, tzinfo=pytz.utc))
+    @patch('habits.tasks.timezone.now',
+           return_value=pytz.utc.localize(datetime(2025, 1, 1, 7, 0, 0)))  # Используем pytz.utc.localize
     def test_check_and_send_habit_reminders_not_due_time_today(self, mock_now, mock_send_message_delay):
         """Тестирование check_and_send_habit_reminders: время уведомления еще не наступило сегодня."""
-        mock_now.return_value = datetime(2025, 1, 1, 7, 0, 0, tzinfo=pytz.utc)
+        mock_now.return_value = pytz.utc.localize(datetime(2025, 1, 1, 7, 0, 0))  # Используем pytz.utc.localize
 
         self.habit1.telegram_chat_id = "chat_id_1"
         self.habit1.time = time(8, 0)
@@ -559,7 +601,8 @@ class HabitTest(APITestCase):
         mock_send_message_delay.assert_not_called()
 
     @patch('habits.tasks._send_telegram_message_async_wrapper.delay')
-    @patch('django.utils.timezone.now', return_value=datetime(2025, 1, 1, 9, 0, 0, tzinfo=pytz.utc))
+    @patch('habits.tasks.timezone.now',
+           return_value=pytz.utc.localize(datetime(2025, 1, 1, 9, 0, 0)))  # Используем pytz.utc.localize
     def test_check_and_send_habit_reminders_no_chat_id_or_pleasant(self, mock_now, mock_send_message_delay):
         """Тестирование check_and_send_habit_reminders: не отправляется для приятных или без chat_id."""
         # Приятная привычка

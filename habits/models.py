@@ -1,7 +1,5 @@
 from django.db import models
 from django.conf import settings
-# Удаляем импорт MaxValueValidator, так как он больше не будет использоваться для этих полей
-# from django.core.validators import MaxValueValidator
 from django.utils import timezone
 
 
@@ -17,12 +15,10 @@ class Habit(models.Model):
                                       related_name='useful_habits')
     periodicity = models.PositiveSmallIntegerField(
         default=1,
-        # УДАЛЕНО: validators=[MaxValueValidator(7)], # Убрали, т.к. валидация в сериализаторе
         verbose_name="Периодичность (в днях)"
     )
     reward = models.CharField(max_length=255, blank=True, null=True, verbose_name="Вознаграждение")
     duration = models.PositiveSmallIntegerField(
-        # УДАЛЕНО: validators=[MaxValueValidator(120)], # Убрали, т.к. валидация в сериализаторе
         verbose_name="Время на выполнение (секунды)",
         help_text="Время, которое предположительно потратит пользователь на выполнение привычки (не более 120 секунд)"
     )
@@ -71,10 +67,27 @@ class Habit(models.Model):
             )
 
         if self.duration is not None and self.duration > 120:
-             raise ValidationError(
-                 'Время на выполнение привычки не должно превышать 120 секунд.'
-             )
+            raise ValidationError(
+                'Время на выполнение привычки не должно превышать 120 секунд.'
+            )
         if self.periodicity is not None and self.periodicity > 7:
-             raise ValidationError(
-                 'Периодичность должна быть от 1 до 7 дней (нельзя выполнять привычку реже, чем 1 раз в 7 дней).'
-             )
+            raise ValidationError(
+                'Периодичность должна быть от 1 до 7 дней (нельзя выполнять привычку реже, чем 1 раз в 7 дней).'
+            )
+
+
+# Новая модель для лога рассылок уведомлений
+class NotificationLog(models.Model):
+    habit = models.ForeignKey(Habit, on_delete=models.CASCADE, verbose_name="Привычка")
+    timestamp = models.DateTimeField(auto_now_add=True, verbose_name="Время отправки")
+    message_content = models.TextField(verbose_name="Содержание сообщения")
+    status = models.CharField(max_length=50, default='QUEUED', verbose_name="Статус отправки")
+
+    class Meta:
+        verbose_name = "Лог уведомления"
+        verbose_name_plural = "Логи уведомлений"
+        ordering = ['-timestamp']  # Сортировка по убыванию времени
+
+    def __str__(self):
+        return f"Уведомление для '{self.habit.action}' отправлено в {self.timestamp.strftime('%Y-%m-%d %H:%M')}"
+
