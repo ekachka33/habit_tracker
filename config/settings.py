@@ -170,6 +170,8 @@ CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_BEAT_INTERVAL = 10  # Для быстрого тестирования, потом можно увеличить
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES_EXCEPTIONS = True
 
 CORS_ALLOW_ALL_ORIGINS = True
 

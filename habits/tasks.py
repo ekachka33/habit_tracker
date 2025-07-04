@@ -15,14 +15,13 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 
 @shared_task(bind=True)
-def _send_telegram_message_async_wrapper(
-    self, chat_id, message_text, notification_log_id=None
-):
+def _send_telegram_message_async_wrapper(self, chat_id, message_text, notification_log_id=None):
     """
     Асинхронная обертка для отправки Telegram сообщения.
     Используется как Celery задача, чтобы не блокировать основной поток.
     Также обновляет статус лога уведомлений и last_notification_sent привычки.
     """
+
     notification_log = None
     if notification_log_id:
         try:
@@ -33,6 +32,8 @@ def _send_telegram_message_async_wrapper(
 
     try:
         if not TELEGRAM_BOT_TOKEN:
+            # Вместо ValueError, можно raise TelegramError для единообразия,
+            # но ValueError также адекватно. Celery все равно перехватит.
             raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения.")
 
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -62,7 +63,8 @@ def _send_telegram_message_async_wrapper(
             logger.error(
                 f"Статус NotificationLog {notification_log_id} " f"обновлен на FAILED."
             )
-        # Можно добавить логику повторной попытки
+        # Добавляем логику повторной попытки
+        # max_retries=3, countdown=60 - 3 попытки с интервалом в 60 секунд
         raise self.retry(exc=e, countdown=60, max_retries=3)
     except Exception as e:
         logger.error(
@@ -75,6 +77,7 @@ def _send_telegram_message_async_wrapper(
             logger.error(
                 f"Статус NotificationLog {notification_log_id} " f"обновлен на FAILED."
             )
+        # Для других ошибок также можно добавить повторную попытку
         raise self.retry(exc=e, countdown=60, max_retries=3)
 
 
