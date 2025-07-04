@@ -5,39 +5,65 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - master
+      - master # Убедитесь, что это ветка, в которую вы пушите
+      - develop # Если вы хотите, чтобы пайплайн запускался и на develop
   pull_request:
     branches:
-      - master
+      - master # Убедитесь, что это ветка, в которую вы отправляете PR
+      - develop # Если вы хотите, чтобы пайплайн запускался и на PR в develop
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
-    steps:
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # *** ВОТ ГДЕ ОШИБКА БЫЛА! steps должен быть на уровне services,
+    # но внутри build-and-test ***
+    steps: # <-- Этот 'steps' должен быть на одном уровне с 'services'
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12' # Используйте версию Python, которая указана в вашем Dockerfile / requirements.txt
+          python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt # Убедитесь, что psycopg2-binary есть в requirements.txt!
+
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          while ! pg_isready -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }}; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
 
       - name: Run Django tests
         run: |
-          # Установите необходимые переменные окружения для тестов
-          # Например, для подключения к базе данных, если тесты её используют
-          # Это будут временные переменные для CI, а не для продакшена
-          echo "DATABASE_URL=sqlite:///./test_db.sqlite3" >> $GITHUB_ENV
-          # Устанавливаем SECRET_KEY из Secrets GitHub
-          echo "SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" >> $GITHUB_ENV
           python manage.py test
-        env: # Это важно: мы явно передаем SECRET_KEY в окружение шага
+        env:
           SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
-
+          POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
 
       - name: Run Linter (Flake8)
         run: |
