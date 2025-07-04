@@ -32,10 +32,12 @@ jobs:
           # Например, для подключения к базе данных, если тесты её используют
           # Это будут временные переменные для CI, а не для продакшена
           echo "DATABASE_URL=sqlite:///./test_db.sqlite3" >> $GITHUB_ENV
-          # Если ваши тесты зависят от Celery или Redis, возможно, их нужно будет заглушить
-          # или запустить упрощенную версию (но для тестов Django часто достаточно SQLite)
-
+          # Устанавливаем SECRET_KEY из Secrets GitHub
+          echo "SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" >> $GITHUB_ENV
           python manage.py test
+        env: # Это важно: мы явно передаем SECRET_KEY в окружение шага
+          SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+
 
       - name: Run Linter (Flake8)
         run: |
