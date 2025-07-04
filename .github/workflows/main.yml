@@ -18,7 +18,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:13
+        image: postgres:14
         env:
           POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
