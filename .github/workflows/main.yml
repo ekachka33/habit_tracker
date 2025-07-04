@@ -1,0 +1,46 @@
+# .github/workflows/main.yml
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main # Или develop, если вы работаете в ветке develop
+  pull_request:
+    branches:
+      - main # Или develop
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' # Используйте версию Python, которая указана в вашем Dockerfile / requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Django tests
+        run: |
+          # Установите необходимые переменные окружения для тестов
+          # Например, для подключения к базе данных, если тесты её используют
+          # Это будут временные переменные для CI, а не для продакшена
+          echo "DATABASE_URL=sqlite:///./test_db.sqlite3" >> $GITHUB_ENV
+          # Если ваши тесты зависят от Celery или Redis, возможно, их нужно будет заглушить
+          # или запустить упрощенную версию (но для тестов Django часто достаточно SQLite)
+
+          python manage.py test
+
+      - name: Run Linter (Flake8)
+        run: |
+          pip install flake8
+          flake8 .
+
+      - name: Check Docker Compose build
+        run: docker compose build --no-pull
