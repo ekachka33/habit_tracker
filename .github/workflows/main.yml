@@ -56,14 +56,24 @@ jobs:
 
       - name: Run Django tests
         run: |
-          python manage.py test
-        env:
-          SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
-          POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
-          POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
+            echo "--- Environment variables for Django tests ---"
+            env | grep POSTGRES # Выводим переменные окружения для POSTGRES
+            env | grep SECRET_KEY # Выводим SECRET_KEY (частично)
+            echo "--------------------------------------------"
+            
+            # Попробуем подключиться к PostgreSQL напрямую через psql
+            # Это должно проверить, что СУБД доступна с данными учетными данными
+            psql -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }} -d ${{ vars.POSTGRES_DB_TEST }} -c "SELECT 1;" || true
+            # Если psql выдаст ошибку, но мы хотим, чтобы workflow продолжался, используем || true
+            
+            python manage.py test
+          env:
+            SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+            POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
+            POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
+            POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+            POSTGRES_HOST: localhost
+            POSTGRES_PORT: 5432
 
       - name: Run Linter (Flake8)
         run: |
