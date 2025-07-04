@@ -30,6 +30,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+          image: redis:latest # Используем последнюю версию Redis
+          ports:
+            - 6379:6379 # Прокидываем порт Redis
+          options: >-
+            --health-cmd "redis-cli ping"
+            --health-interval 10s
+            --health-timeout 5s
+            --health-retries 5
+    
+    
 
     # *** ВОТ ГДЕ ОШИБКА БЫЛА! steps должен быть на уровне services,
     # но внутри build-and-test ***
@@ -82,4 +93,41 @@ jobs:
 
       - name: Check Docker Compose build
         run: docker compose build --no-pull
+
+      - name: Wait for Redis to be ready # НОВЫЙ ШАГ
+        run: |
+            while ! nc -z localhost 6379; do
+            echo "Waiting for Redis..."
+            sleep 2
+            done
+            - name: Wait for PostgreSQL to be ready # (этот шаг уже есть)
+              run: |
+                while ! pg_isready -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }}; do
+                  echo "Waiting for PostgreSQL..."
+                  sleep 2
+                done
+              env:
+                PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+
+            - name: Run Django tests
+              run: |
+                echo "--- Environment variables for Django tests ---"
+                env | grep POSTGRES # Выводим переменные окружения для POSTGRES
+                env | grep SECRET_KEY # Выводим SECRET_KEY (частично)
+                env | grep TELEGRAM_BOT_TOKEN # НОВАЯ СТРОКА
+                echo "--------------------------------------------"
+                
+                # Попробуем подключиться к PostgreSQL напрямую через psql
+                psql -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }} -d ${{ vars.POSTGRES_DB_TEST }} -c "SELECT 1;" || true
+                
+                python manage.py test
+              env:
+                SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+                POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
+                POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
+                POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+                POSTGRES_HOST: localhost
+                POSTGRES_PORT: 5432
+                CELERY_BROKER_URL: redis://localhost:6379/0 # НОВАЯ СТРОКА: Укажите Celery URL для тестов
+                TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }} # НОВАЯ СТРОКА: Токен Telegram
 
