@@ -5,10 +5,10 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - main # Или develop, если вы работаете в ветке develop
+      - master
   pull_request:
     branches:
-      - main # Или develop
+      - master
 
 jobs:
   build-and-test:
