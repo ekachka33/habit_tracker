@@ -67,7 +67,7 @@ jobs:
             # Если psql выдаст ошибку, но мы хотим, чтобы workflow продолжался, используем || true
             
             python manage.py test
-          env:
+        env:
             SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
             POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
             POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
