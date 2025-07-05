@@ -143,3 +143,4 @@ jobs:
             docker compose exec backend python manage.py migrate --noinput
 
             echo "Deployment finished successfully!"
+          
