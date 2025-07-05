@@ -5,14 +5,40 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - main # Или develop, если вы работаете в ветке develop
+      - master
+      - develop
   pull_request:
     branches:
-      - main # Или develop
+      - master
+      - develop
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --host=localhost --port=5432 --username=${{ vars.POSTGRES_USER_TEST }}"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -21,21 +47,49 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12' # Используйте версию Python, которая указана в вашем Dockerfile / requirements.txt
+          python-version: '3.12'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Wait for Redis to be ready
+        run: |
+          while ! nc -z localhost 6379; do
+            echo "Waiting for Redis..."
+            sleep 2
+          done
+
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          while ! pg_isready -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }}; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+
       - name: Run Django tests
         run: |
-          # Установите необходимые переменные окружения для тестов
-          # Например, для подключения к базе данных, если тесты её используют
-          # Это будут временные переменные для CI, а не для продакшена
-          echo "DATABASE_URL=sqlite:///./test_db.sqlite3" >> $GITHUB_ENV
-          # Если ваши тесты зависят от Celery или Redis, возможно, их нужно будет заглушить
-          # или запустить упрощенную версию (но для тестов Django часто достаточно SQLite)
+          echo "--- Environment variables for Django tests ---"
+          env | grep POSTGRES
+          env | grep SECRET_KEY
+          env | grep TELEGRAM_BOT_TOKEN
+          echo "--------------------------------------------"
+
+          export PGPASSWORD=${{ secrets.POSTGRES_PASSWORD_TEST }}
+          psql -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }} -d ${{ vars.POSTGRES_DB_TEST }} -c "SELECT 1;" || true
 
           python manage.py test
+        env:
+          SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB_TEST }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER_TEST }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
       - name: Run Linter (Flake8)
         run: |
@@ -43,4 +97,51 @@ jobs:
           flake8 .
 
       - name: Check Docker Compose build
-        run: docker compose build --no-pull
+        run: docker compose build
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Deploy with Docker Compose
+        run: |
+          SERVER_IP="158.160.181.2"
+          SERVER_USER="ubuntu"
+          SSH_TARGET_DIR="/home/ubuntu/habit_tracker_project"
+
+          echo "Ensuring project directory exists and has correct permissions on server..."
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_IP} "mkdir -p ${SSH_TARGET_DIR} && sudo chown -R ${SERVER_USER}:${SERVER_USER} ${SSH_TARGET_DIR}"
+
+          echo "Synchronizing project files to server using rsync..."
+          # Исключаем .env, .git, node_modules, __pycache__ из копирования
+          rsync -avz --exclude '.git' --exclude 'node_modules' --exclude '__pycache__' --exclude '.env' \
+                ./ ${SERVER_USER}@${SERVER_IP}:${SSH_TARGET_DIR}/
+
+          echo "Executing Docker Compose commands on the remote server..."
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_IP} << 'EOF'
+            cd "${SSH_TARGET_DIR}"
+
+            echo "Stopping and removing old containers..."
+            docker compose down
+
+            echo "Building Docker images..."
+            docker compose build --no-cache
+
+            echo "Starting containers..."
+            docker compose up -d
+
+            echo "Running database migrations..."
+            docker compose exec backend python manage.py migrate --noinput
+
+            echo "Deployment finished successfully!"
+          
+          

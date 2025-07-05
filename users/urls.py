@@ -1,16 +1,24 @@
-# users/urls.py (обновленный, только для регистрации)
 from django.urls import path
-from users.views import UserRegisterAPIView
-# from rest_framework.routers import DefaultRouter # Если у вас есть ViewSet для User, но судя по всему, нет
 
-app_name = 'users' # ОЧЕНЬ ВАЖНО: определяет пространство имен 'users'
+from users.apps import UsersConfig
+from users.views import UserRegisterAPIView
+
+# If you have a ViewSet for User, but apparently not
+# from rest_framework.routers import DefaultRouter
+
+
+app_name = UsersConfig.name  # VERY IMPORTANT: defines the 'users' namespace
 
 # router = DefaultRouter()
-# router.register(r'users', UserViewSet, basename='user') # Пример, если бы был UserViewSet
+# router.register(r'users', UserViewSet, basename='user') # Example if UserViewSet existed
 
 urlpatterns = [
-    # Путь для регистрации пользователя
-    path('register/', UserRegisterAPIView.as_view(), name='user_register'),
-    # Если был бы роутер, то так:
+    # Path for user registration
+    path(
+        "register/",
+        UserRegisterAPIView.as_view(),
+        name="user_register",
+    ),
+    # If there was a router, then like this:
     # path('', include(router.urls)),
 ]
