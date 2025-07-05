@@ -75,10 +75,10 @@ jobs:
           env | grep SECRET_KEY
           env | grep TELEGRAM_BOT_TOKEN
           echo "--------------------------------------------"
-          
+
           export PGPASSWORD=${{ secrets.POSTGRES_PASSWORD_TEST }}
           psql -h localhost -p 5432 -U ${{ vars.POSTGRES_USER_TEST }} -d ${{ vars.POSTGRES_DB_TEST }} -c "SELECT 1;" || true
-          
+
           python manage.py test
         env:
           SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
@@ -88,6 +88,7 @@ jobs:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5432
           CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
       - name: Run Linter (Flake8)
@@ -97,3 +98,48 @@ jobs:
 
       - name: Check Docker Compose build
         run: docker compose build
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Deploy with Docker Compose
+        run: |
+          SERVER_IP="158.160.181.2"
+          SERVER_USER="ubuntu"
+          SSH_TARGET_DIR="/home/ubuntu/habit_tracker_project"
+
+          echo "Ensuring project directory exists and has correct permissions on server..."
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_IP} "mkdir -p ${SSH_TARGET_DIR} && sudo chown -R ${SERVER_USER}:${SERVER_USER} ${SSH_TARGET_DIR}"
+
+          echo "Synchronizing project files to server using rsync..."
+          # Исключаем .env, .git, node_modules, __pycache__ из копирования
+          rsync -avz --exclude '.git' --exclude 'node_modules' --exclude '__pycache__' --exclude '.env' \
+                ./ ${SERVER_USER}@${SERVER_IP}:${SSH_TARGET_DIR}/
+
+          echo "Executing Docker Compose commands on the remote server..."
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_IP} << 'EOF'
+            cd "${SSH_TARGET_DIR}"
+
+            echo "Stopping and removing old containers..."
+            docker compose down
+
+            echo "Building Docker images..."
+            docker compose build --no-cache
+
+            echo "Starting containers..."
+            docker compose up -d
+
+            echo "Running database migrations..."
+            docker compose exec backend python manage.py migrate --noinput
+
+            echo "Deployment finished successfully!"
