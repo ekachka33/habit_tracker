@@ -1,6 +1,5 @@
 from datetime import datetime, time
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import patch
 import pytz
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -8,15 +7,14 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.test import override_settings
-
 from habits.models import Habit, NotificationLog
 from habits.tasks import (
-    _send_telegram_message_async_wrapper,
     check_and_send_habit_reminders,
     send_telegram_notification,
 )
 
 User = get_user_model()
+
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES_EXCEPTIONS=True)
 class HabitTest(APITestCase):
@@ -578,33 +576,6 @@ class HabitTest(APITestCase):
     @patch("habits.tasks.timezone.now", return_value=pytz.utc.localize(datetime(2025, 1, 1, 9, 0, 0)))
     def test_check_and_send_habit_reminders_no_chat_id_or_pleasant(self, mock_now, mock_send_notification_delay):
         Habit.objects.all().delete()
-
-        pleasant_habit_for_test = Habit.objects.create(
-            user=self.user1,
-            action="Тестовая приятная привычка",
-            place="Дома",
-            time=time(8, 0),
-            is_pleasant=True,
-            periodicity=1,
-            duration=60,
-            is_public=False,
-            telegram_chat_id="chat_id_pleasant",
-            last_notification_sent=None,
-        )
-
-        no_chat_id_habit_for_test = Habit.objects.create(
-            user=self.user1,
-            action="Тестовая полезная привычка без чата",
-            place="В офисе",
-            time=time(8, 0),
-            is_pleasant=False,
-            periodicity=1,
-            duration=60,
-            is_public=False,
-            telegram_chat_id="",
-            reward="Тестовая награда",
-            last_notification_sent=None,
-        )
 
         check_and_send_habit_reminders()
 
