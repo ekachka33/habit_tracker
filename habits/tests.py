@@ -486,7 +486,6 @@ class HabitTest(APITestCase):
         log_entry = NotificationLog.objects.first()
         self.assertEqual(log_entry.status, "QUEUED")
 
-
     @patch("habits.tasks.send_telegram_notification.delay")
     @patch("habits.tasks.timezone.now")
     def test_check_and_send_habit_reminders_daily(self, mock_now, mock_send_notification_delay):
