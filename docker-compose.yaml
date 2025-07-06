@@ -94,3 +94,4 @@ volumes:
   postgres_data:
   static_files: # Новый volume для статических файлов
   media_files: # Новый volume для медиа файлов
+
