@@ -114,7 +114,7 @@ jobs:
 
       - name: Deploy with Docker Compose
         run: |
-          SERVER_IP="158.160.181.2"
+          SERVER_IP="158.160.169.118"
           SERVER_USER="ubuntu"
           SSH_TARGET_DIR="/home/ubuntu/habit_tracker_project"
 
